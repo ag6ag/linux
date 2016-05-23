@@ -125,8 +125,10 @@ static const struct block_device_operations xlvbd_block_fops;
  */
 
 static unsigned int xen_blkif_max_segments = 32;
-module_param_named(max, xen_blkif_max_segments, int, S_IRUGO);
-MODULE_PARM_DESC(max, "Maximum amount of segments in indirect requests (default is 32)");
+module_param_named(max_indirect_segments, xen_blkif_max_segments, uint,
+		   S_IRUGO);
+MODULE_PARM_DESC(max_indirect_segments,
+		 "Maximum amount of segments in indirect requests (default is 32)");
 
 static unsigned int xen_blkif_max_queues = 4;
 module_param_named(max_queues, xen_blkif_max_queues, uint, S_IRUGO);
@@ -996,7 +998,8 @@ static const char *flush_info(unsigned int feature_flush)
 
 static void xlvbd_flush(struct blkfront_info *info)
 {
-	blk_queue_flush(info->rq, info->feature_flush);
+	blk_queue_write_cache(info->rq, info->feature_flush & REQ_FLUSH,
+				info->feature_flush & REQ_FUA);
 	pr_info("blkfront: %s: %s %s %s %s %s\n",
 		info->gd->disk_name, flush_info(info->feature_flush),
 		"persistent grants:", info->feature_persistent ?

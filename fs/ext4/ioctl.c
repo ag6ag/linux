@@ -13,8 +13,8 @@
 #include <linux/compat.h>
 #include <linux/mount.h>
 #include <linux/file.h>
-#include <linux/random.h>
 #include <linux/quotaops.h>
+#include <linux/uuid.h>
 #include <asm/uaccess.h>
 #include "ext4_jbd2.h"
 #include "ext4.h"
@@ -581,6 +581,11 @@ group_extend_out:
 		if (ext4_has_feature_bigalloc(sb)) {
 			ext4_msg(sb, KERN_ERR,
 				 "Online defrag not supported with bigalloc");
+			err = -EOPNOTSUPP;
+			goto mext_out;
+		} else if (IS_DAX(inode)) {
+			ext4_msg(sb, KERN_ERR,
+				 "Online defrag not supported with DAX");
 			err = -EOPNOTSUPP;
 			goto mext_out;
 		}
