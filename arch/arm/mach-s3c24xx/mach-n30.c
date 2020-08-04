@@ -1,18 +1,15 @@
-/* Machine specific code for the Acer n30, Acer N35, Navman PiN 570,
- * Yakumo AlphaX and Airis NC05 PDAs.
- *
- * Copyright (c) 2003-2005 Simtec Electronics
- *	Ben Dooks <ben@simtec.co.uk>
- *
- * Copyright (c) 2005-2008 Christer Weinigel <christer@weinigel.se>
- *
- * There is a wiki with more information about the n30 port at
- * http://handhelds.org/moin/moin.cgi/AcerN30Documentation .
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- */
+// SPDX-License-Identifier: GPL-2.0
+//
+// Machine specific code for the Acer n30, Acer N35, Navman PiN 570,
+// Yakumo AlphaX and Airis NC05 PDAs.
+//
+// Copyright (c) 2003-2005 Simtec Electronics
+//	Ben Dooks <ben@simtec.co.uk>
+//
+// Copyright (c) 2005-2008 Christer Weinigel <christer@weinigel.se>
+//
+// There is a wiki with more information about the n30 port at
+// https://handhelds.org/moin/moin.cgi/AcerN30Documentation .
 
 #include <linux/kernel.h>
 #include <linux/types.h>
@@ -20,6 +17,7 @@
 #include <linux/gpio_keys.h>
 #include <linux/init.h>
 #include <linux/gpio.h>
+#include <linux/gpio/machine.h>
 #include <linux/input.h>
 #include <linux/interrupt.h>
 #include <linux/platform_device.h>
@@ -47,6 +45,7 @@
 
 #include <plat/cpu.h>
 #include <plat/devs.h>
+#include <plat/gpio-cfg.h>
 #include <linux/platform_data/mmc-s3cmci.h>
 #include <linux/platform_data/usb-s3c2410_udc.h>
 #include <plat/samsung-time.h>
@@ -248,17 +247,33 @@ static struct platform_device n35_button_device = {
 };
 
 /* This is the bluetooth LED on the device. */
+
+static struct gpiod_lookup_table n30_blue_led_gpio_table = {
+	.dev_id = "s3c24xx_led.1",
+	.table = {
+		GPIO_LOOKUP("GPG", 6, NULL, GPIO_ACTIVE_HIGH),
+		{ },
+	},
+};
+
 static struct s3c24xx_led_platdata n30_blue_led_pdata = {
 	.name		= "blue_led",
-	.gpio		= S3C2410_GPG(6),
 	.def_trigger	= "",
 };
 
 /* This is the blue LED on the device. Originally used to indicate GPS activity
  * by flashing. */
+
+static struct gpiod_lookup_table n35_blue_led_gpio_table = {
+	.dev_id = "s3c24xx_led.1",
+	.table = {
+		GPIO_LOOKUP("GPD", 8, NULL, GPIO_ACTIVE_HIGH),
+		{ },
+	},
+};
+
 static struct s3c24xx_led_platdata n35_blue_led_pdata = {
 	.name		= "blue_led",
-	.gpio		= S3C2410_GPD(8),
 	.def_trigger	= "",
 };
 
@@ -266,17 +281,30 @@ static struct s3c24xx_led_platdata n35_blue_led_pdata = {
  * red, blinking green or solid green when the battery is low,
  * charging or full respectively.  By driving GPD9 low, it's possible
  * to force the LED to blink red, so call that warning LED.  */
+
+static struct gpiod_lookup_table n30_warning_led_gpio_table = {
+	.dev_id = "s3c24xx_led.2",
+	.table = {
+		GPIO_LOOKUP("GPD", 9, NULL, GPIO_ACTIVE_LOW),
+		{ },
+	},
+};
+
 static struct s3c24xx_led_platdata n30_warning_led_pdata = {
 	.name		= "warning_led",
-	.flags          = S3C24XX_LEDF_ACTLOW,
-	.gpio		= S3C2410_GPD(9),
 	.def_trigger	= "",
+};
+
+static struct gpiod_lookup_table n35_warning_led_gpio_table = {
+	.dev_id = "s3c24xx_led.2",
+	.table = {
+		GPIO_LOOKUP("GPD", 9, NULL, GPIO_ACTIVE_LOW | GPIO_OPEN_DRAIN),
+		{ },
+	},
 };
 
 static struct s3c24xx_led_platdata n35_warning_led_pdata = {
 	.name		= "warning_led",
-	.flags          = S3C24XX_LEDF_ACTLOW | S3C24XX_LEDF_TRISTATE,
-	.gpio		= S3C2410_GPD(9),
 	.def_trigger	= "",
 };
 
@@ -353,10 +381,19 @@ static void n30_sdi_set_power(unsigned char power_mode, unsigned short vdd)
 }
 
 static struct s3c24xx_mci_pdata n30_mci_cfg __initdata = {
-	.gpio_detect	= S3C2410_GPF(1),
-	.gpio_wprotect  = S3C2410_GPG(10),
 	.ocr_avail	= MMC_VDD_32_33,
 	.set_power	= n30_sdi_set_power,
+};
+
+static struct gpiod_lookup_table n30_mci_gpio_table = {
+	.dev_id = "s3c2410-sdi",
+	.table = {
+		/* Card detect S3C2410_GPF(1) */
+		GPIO_LOOKUP("GPF", 1, "cd", GPIO_ACTIVE_LOW),
+		/* Write protect S3C2410_GPG(10) */
+		GPIO_LOOKUP("GPG", 10, "wp", GPIO_ACTIVE_LOW),
+		{ },
+	},
 };
 
 static struct platform_device *n30_devices[] __initdata = {
@@ -522,7 +559,7 @@ static void __init n30_hwinit(void)
 	 *
 	 * The pull ups for H6/H7 are enabled on N30 but not on the
 	 * N35/PiN.  I suppose is useful for a budget model of the N30
-	 * with no bluetooh.  It doesn't hurt to have the pull ups
+	 * with no bluetooth.  It doesn't hurt to have the pull ups
 	 * enabled on the N35, so leave them enabled for all models.
 	 */
 	__raw_writel(0x0028aaaa, S3C2410_GPHCON);
@@ -552,6 +589,7 @@ static void __init n30_init(void)
 
 	s3c24xx_fb_set_platdata(&n30_fb_info);
 	s3c24xx_udc_set_platdata(&n30_udc_cfg);
+	gpiod_add_lookup_table(&n30_mci_gpio_table);
 	s3c24xx_mci_set_platdata(&n30_mci_cfg);
 	s3c_i2c0_set_platdata(&n30_i2ccfg);
 
@@ -569,6 +607,12 @@ static void __init n30_init(void)
 				      S3C2410_MISCCR_USBSUSPND0 |
 				      S3C2410_MISCCR_USBSUSPND1, 0x0);
 
+		/* Disable pull-up and add GPIO tables */
+		s3c_gpio_setpull(S3C2410_GPG(6), S3C_GPIO_PULL_NONE);
+		s3c_gpio_setpull(S3C2410_GPD(9), S3C_GPIO_PULL_NONE);
+		gpiod_add_lookup_table(&n30_blue_led_gpio_table);
+		gpiod_add_lookup_table(&n30_warning_led_gpio_table);
+
 		platform_add_devices(n30_devices, ARRAY_SIZE(n30_devices));
 	}
 
@@ -585,6 +629,12 @@ static void __init n30_init(void)
 				      S3C2410_MISCCR_USBSUSPND0 |
 				      S3C2410_MISCCR_USBSUSPND1,
 				      S3C2410_MISCCR_USBSUSPND0);
+
+		/* Disable pull-up and add GPIO tables */
+		s3c_gpio_setpull(S3C2410_GPD(8), S3C_GPIO_PULL_NONE);
+		s3c_gpio_setpull(S3C2410_GPD(9), S3C_GPIO_PULL_NONE);
+		gpiod_add_lookup_table(&n35_blue_led_gpio_table);
+		gpiod_add_lookup_table(&n35_warning_led_gpio_table);
 
 		platform_add_devices(n35_devices, ARRAY_SIZE(n35_devices));
 	}

@@ -1,12 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * devfreq-event: a framework to provide raw data and events of devfreq devices
  *
  * Copyright (C) 2015 Samsung Electronics
  * Author: Chanwoo Choi <cw00.choi@samsung.com>
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
  *
  * This driver is based on drivers/devfreq/devfreq.c.
  */
@@ -15,7 +12,7 @@
 #include <linux/kernel.h>
 #include <linux/err.h>
 #include <linux/init.h>
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/slab.h>
 #include <linux/list.h>
 #include <linux/of.h>
@@ -240,7 +237,7 @@ struct devfreq_event_dev *devfreq_event_get_edev_by_phandle(struct device *dev,
 	}
 
 	list_for_each_entry(edev, &devfreq_event_list, node) {
-		if (!strcmp(edev->desc->name, node->name))
+		if (of_node_name_eq(node, edev->desc->name))
 			goto out;
 	}
 	edev = NULL;
@@ -277,8 +274,8 @@ int devfreq_event_get_edev_count(struct device *dev)
 						sizeof(u32));
 	if (count < 0) {
 		dev_err(dev,
-			"failed to get the count of devfreq-event in %s node\n",
-			dev->of_node->full_name);
+			"failed to get the count of devfreq-event in %pOF node\n",
+			dev->of_node);
 		return count;
 	}
 
@@ -296,7 +293,7 @@ static void devfreq_event_release_edev(struct device *dev)
 /**
  * devfreq_event_add_edev() - Add new devfreq-event device.
  * @dev		: the device owning the devfreq-event device being created
- * @desc	: the devfreq-event device's decriptor which include essential
+ * @desc	: the devfreq-event device's descriptor which include essential
  *		  data for devfreq-event device.
  *
  * Note that this function add new devfreq-event device to devfreq-event class
@@ -306,7 +303,7 @@ struct devfreq_event_dev *devfreq_event_add_edev(struct device *dev,
 						struct devfreq_event_desc *desc)
 {
 	struct devfreq_event_dev *edev;
-	static atomic_t event_no = ATOMIC_INIT(0);
+	static atomic_t event_no = ATOMIC_INIT(-1);
 	int ret;
 
 	if (!dev || !desc)
@@ -329,7 +326,7 @@ struct devfreq_event_dev *devfreq_event_add_edev(struct device *dev,
 	edev->dev.class = devfreq_event_class;
 	edev->dev.release = devfreq_event_release_edev;
 
-	dev_set_name(&edev->dev, "event.%d", atomic_inc_return(&event_no) - 1);
+	dev_set_name(&edev->dev, "event%d", atomic_inc_return(&event_no));
 	ret = device_register(&edev->dev);
 	if (ret < 0) {
 		put_device(&edev->dev);
@@ -349,9 +346,9 @@ EXPORT_SYMBOL_GPL(devfreq_event_add_edev);
 
 /**
  * devfreq_event_remove_edev() - Remove the devfreq-event device registered.
- * @dev		: the devfreq-event device
+ * @edev	: the devfreq-event device
  *
- * Note that this function remove the registered devfreq-event device.
+ * Note that this function removes the registered devfreq-event device.
  */
 int devfreq_event_remove_edev(struct devfreq_event_dev *edev)
 {
@@ -388,7 +385,7 @@ static void devm_devfreq_event_release(struct device *dev, void *res)
 /**
  * devm_devfreq_event_add_edev() - Resource-managed devfreq_event_add_edev()
  * @dev		: the device owning the devfreq-event device being created
- * @desc	: the devfreq-event device's decriptor which include essential
+ * @desc	: the devfreq-event device's descriptor which include essential
  *		  data for devfreq-event device.
  *
  * Note that this function manages automatically the memory of devfreq-event
@@ -481,13 +478,3 @@ static int __init devfreq_event_init(void)
 	return 0;
 }
 subsys_initcall(devfreq_event_init);
-
-static void __exit devfreq_event_exit(void)
-{
-	class_destroy(devfreq_event_class);
-}
-module_exit(devfreq_event_exit);
-
-MODULE_AUTHOR("Chanwoo Choi <cw00.choi@samsung.com>");
-MODULE_DESCRIPTION("DEVFREQ-Event class support");
-MODULE_LICENSE("GPL");

@@ -1,12 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * dm355evm_msp.c - driver for MSP430 firmware on DM355EVM board
  *
  * Copyright (C) 2008 David Brownell
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
  */
 
 #include <linux/init.h>
@@ -18,7 +14,7 @@
 #include <linux/gpio.h>
 #include <linux/leds.h>
 #include <linux/i2c.h>
-#include <linux/i2c/dm355evm_msp.h>
+#include <linux/mfd/dm355evm_msp.h>
 
 
 /*
@@ -199,11 +195,8 @@ static struct device *add_child(struct i2c_client *client, const char *name,
 	int			status;
 
 	pdev = platform_device_alloc(name, -1);
-	if (!pdev) {
-		dev_dbg(&client->dev, "can't alloc dev\n");
-		status = -ENOMEM;
-		goto err;
-	}
+	if (!pdev)
+		return ERR_PTR(-ENOMEM);
 
 	device_init_wakeup(&pdev->dev, can_wakeup);
 	pdev->dev.parent = &client->dev;
@@ -212,7 +205,7 @@ static struct device *add_child(struct i2c_client *client, const char *name,
 		status = platform_device_add_data(pdev, pdata, pdata_len);
 		if (status < 0) {
 			dev_dbg(&pdev->dev, "can't add platform_data\n");
-			goto err;
+			goto put_device;
 		}
 	}
 
@@ -225,19 +218,20 @@ static struct device *add_child(struct i2c_client *client, const char *name,
 		status = platform_device_add_resources(pdev, &r, 1);
 		if (status < 0) {
 			dev_dbg(&pdev->dev, "can't add irq\n");
-			goto err;
+			goto put_device;
 		}
 	}
 
 	status = platform_device_add(pdev);
+	if (status)
+		goto put_device;
 
-err:
-	if (status < 0) {
-		platform_device_put(pdev);
-		dev_err(&client->dev, "can't add %s dev\n", name);
-		return ERR_PTR(status);
-	}
 	return &pdev->dev;
+
+put_device:
+	platform_device_put(pdev);
+	dev_err(&client->dev, "failed to add device %s\n", name);
+	return ERR_PTR(status);
 }
 
 static int add_children(struct i2c_client *client)

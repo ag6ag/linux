@@ -1,22 +1,9 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Originally from efivars.c
  *
  * Copyright (C) 2001,2003,2004 Dell <Matt_Domsch@dell.com>
  * Copyright (C) 2004 Intel Corporation <matthew.e.tolentino@intel.com>
- *
- *  This program is free software; you can redistribute it and/or modify
- *  it under the terms of the GNU General Public License as published by
- *  the Free Software Foundation; either version 2 of the License, or
- *  (at your option) any later version.
- *
- *  This program is distributed in the hope that it will be useful,
- *  but WITHOUT ANY WARRANTY; without even the implied warranty of
- *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- *  GNU General Public License for more details.
- *
- *  You should have received a copy of the GNU General Public License
- *  along with this program; if not, write to the Free Software
- *  Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
 #include <linux/capability.h>
@@ -36,6 +23,14 @@
 
 /* Private pointer to registered efivars */
 static struct efivars *__efivars;
+
+/*
+ * efivars_lock protects three things:
+ * 1) efivarfs_list and efivars_sysfs_list
+ * 2) ->ops calls
+ * 3) (un)registration of __efivars
+ */
+static DEFINE_SEMAPHORE(efivars_lock);
 
 static bool efivar_wq_enabled = true;
 DECLARE_WORK(efivar_work, NULL);
@@ -310,7 +305,12 @@ EXPORT_SYMBOL_GPL(efivar_variable_is_removable);
 static efi_status_t
 check_var_size(u32 attributes, unsigned long size)
 {
-	const struct efivar_operations *fops = __efivars->ops;
+	const struct efivar_operations *fops;
+
+	if (!__efivars)
+		return EFI_UNSUPPORTED;
+
+	fops = __efivars->ops;
 
 	if (!fops->query_variable_store)
 		return EFI_UNSUPPORTED;
@@ -321,7 +321,12 @@ check_var_size(u32 attributes, unsigned long size)
 static efi_status_t
 check_var_size_nonblocking(u32 attributes, unsigned long size)
 {
-	const struct efivar_operations *fops = __efivars->ops;
+	const struct efivar_operations *fops;
+
+	if (!__efivars)
+		return EFI_UNSUPPORTED;
+
+	fops = __efivars->ops;
 
 	if (!fops->query_variable_store)
 		return EFI_UNSUPPORTED;
@@ -421,12 +426,17 @@ static void dup_variable_bug(efi_char16_t *str16, efi_guid_t *vendor_guid,
 int efivar_init(int (*func)(efi_char16_t *, efi_guid_t, unsigned long, void *),
 		void *data, bool duplicates, struct list_head *head)
 {
-	const struct efivar_operations *ops = __efivars->ops;
+	const struct efivar_operations *ops;
 	unsigned long variable_name_size = 1024;
 	efi_char16_t *variable_name;
 	efi_status_t status;
 	efi_guid_t vendor_guid;
 	int err = 0;
+
+	if (!__efivars)
+		return -EFAULT;
+
+	ops = __efivars->ops;
 
 	variable_name = kzalloc(variable_name_size, GFP_KERNEL);
 	if (!variable_name) {
@@ -434,7 +444,10 @@ int efivar_init(int (*func)(efi_char16_t *, efi_guid_t, unsigned long, void *),
 		return -ENOMEM;
 	}
 
-	spin_lock_irq(&__efivars->lock);
+	if (down_interruptible(&efivars_lock)) {
+		err = -EINTR;
+		goto free;
+	}
 
 	/*
 	 * Per EFI spec, the maximum storage allocated for both
@@ -450,7 +463,7 @@ int efivar_init(int (*func)(efi_char16_t *, efi_guid_t, unsigned long, void *),
 		switch (status) {
 		case EFI_SUCCESS:
 			if (duplicates)
-				spin_unlock_irq(&__efivars->lock);
+				up(&efivars_lock);
 
 			variable_name_size = var_name_strnsize(variable_name,
 							       variable_name_size);
@@ -476,8 +489,12 @@ int efivar_init(int (*func)(efi_char16_t *, efi_guid_t, unsigned long, void *),
 					status = EFI_NOT_FOUND;
 			}
 
-			if (duplicates)
-				spin_lock_irq(&__efivars->lock);
+			if (duplicates) {
+				if (down_interruptible(&efivars_lock)) {
+					err = -EINTR;
+					goto free;
+				}
+			}
 
 			break;
 		case EFI_NOT_FOUND:
@@ -491,8 +508,8 @@ int efivar_init(int (*func)(efi_char16_t *, efi_guid_t, unsigned long, void *),
 
 	} while (status != EFI_NOT_FOUND);
 
-	spin_unlock_irq(&__efivars->lock);
-
+	up(&efivars_lock);
+free:
 	kfree(variable_name);
 
 	return err;
@@ -503,24 +520,34 @@ EXPORT_SYMBOL_GPL(efivar_init);
  * efivar_entry_add - add entry to variable list
  * @entry: entry to add to list
  * @head: list head
+ *
+ * Returns 0 on success, or a kernel error code on failure.
  */
-void efivar_entry_add(struct efivar_entry *entry, struct list_head *head)
+int efivar_entry_add(struct efivar_entry *entry, struct list_head *head)
 {
-	spin_lock_irq(&__efivars->lock);
+	if (down_interruptible(&efivars_lock))
+		return -EINTR;
 	list_add(&entry->list, head);
-	spin_unlock_irq(&__efivars->lock);
+	up(&efivars_lock);
+
+	return 0;
 }
 EXPORT_SYMBOL_GPL(efivar_entry_add);
 
 /**
  * efivar_entry_remove - remove entry from variable list
  * @entry: entry to remove from list
+ *
+ * Returns 0 on success, or a kernel error code on failure.
  */
-void efivar_entry_remove(struct efivar_entry *entry)
+int efivar_entry_remove(struct efivar_entry *entry)
 {
-	spin_lock_irq(&__efivars->lock);
+	if (down_interruptible(&efivars_lock))
+		return -EINTR;
 	list_del(&entry->list);
-	spin_unlock_irq(&__efivars->lock);
+	up(&efivars_lock);
+
+	return 0;
 }
 EXPORT_SYMBOL_GPL(efivar_entry_remove);
 
@@ -537,10 +564,8 @@ EXPORT_SYMBOL_GPL(efivar_entry_remove);
  */
 static void efivar_entry_list_del_unlock(struct efivar_entry *entry)
 {
-	lockdep_assert_held(&__efivars->lock);
-
 	list_del(&entry->list);
-	spin_unlock_irq(&__efivars->lock);
+	up(&efivars_lock);
 }
 
 /**
@@ -560,14 +585,14 @@ static void efivar_entry_list_del_unlock(struct efivar_entry *entry)
  */
 int __efivar_entry_delete(struct efivar_entry *entry)
 {
-	const struct efivar_operations *ops = __efivars->ops;
 	efi_status_t status;
 
-	lockdep_assert_held(&__efivars->lock);
+	if (!__efivars)
+		return -EINVAL;
 
-	status = ops->set_variable(entry->var.VariableName,
-				   &entry->var.VendorGuid,
-				   0, 0, NULL);
+	status = __efivars->ops->set_variable(entry->var.VariableName,
+					      &entry->var.VendorGuid,
+					      0, 0, NULL);
 
 	return efi_status_to_err(status);
 }
@@ -581,20 +606,27 @@ EXPORT_SYMBOL_GPL(__efivar_entry_delete);
  * variable list. It is the caller's responsibility to free @entry
  * once we return.
  *
- * Returns 0 on success, or a converted EFI status code if
- * set_variable() fails.
+ * Returns 0 on success, -EINTR if we can't grab the semaphore,
+ * converted EFI status code if set_variable() fails.
  */
 int efivar_entry_delete(struct efivar_entry *entry)
 {
-	const struct efivar_operations *ops = __efivars->ops;
+	const struct efivar_operations *ops;
 	efi_status_t status;
 
-	spin_lock_irq(&__efivars->lock);
+	if (down_interruptible(&efivars_lock))
+		return -EINTR;
+
+	if (!__efivars) {
+		up(&efivars_lock);
+		return -EINVAL;
+	}
+	ops = __efivars->ops;
 	status = ops->set_variable(entry->var.VariableName,
 				   &entry->var.VendorGuid,
 				   0, 0, NULL);
 	if (!(status == EFI_SUCCESS || status == EFI_NOT_FOUND)) {
-		spin_unlock_irq(&__efivars->lock);
+		up(&efivars_lock);
 		return efi_status_to_err(status);
 	}
 
@@ -620,22 +652,28 @@ EXPORT_SYMBOL_GPL(efivar_entry_delete);
  * If @head is not NULL a lookup is performed to determine whether
  * the entry is already on the list.
  *
- * Returns 0 on success, -EEXIST if a lookup is performed and the entry
- * already exists on the list, or a converted EFI status code if
- * set_variable() fails.
+ * Returns 0 on success, -EINTR if we can't grab the semaphore,
+ * -EEXIST if a lookup is performed and the entry already exists on
+ * the list, or a converted EFI status code if set_variable() fails.
  */
 int efivar_entry_set(struct efivar_entry *entry, u32 attributes,
 		     unsigned long size, void *data, struct list_head *head)
 {
-	const struct efivar_operations *ops = __efivars->ops;
+	const struct efivar_operations *ops;
 	efi_status_t status;
 	efi_char16_t *name = entry->var.VariableName;
 	efi_guid_t vendor = entry->var.VendorGuid;
 
-	spin_lock_irq(&__efivars->lock);
+	if (down_interruptible(&efivars_lock))
+		return -EINTR;
 
+	if (!__efivars) {
+		up(&efivars_lock);
+		return -EINVAL;
+	}
+	ops = __efivars->ops;
 	if (head && efivar_entry_find(name, vendor, head, false)) {
-		spin_unlock_irq(&__efivars->lock);
+		up(&efivars_lock);
 		return -EEXIST;
 	}
 
@@ -644,7 +682,7 @@ int efivar_entry_set(struct efivar_entry *entry, u32 attributes,
 		status = ops->set_variable(name, &vendor,
 					   attributes, size, data);
 
-	spin_unlock_irq(&__efivars->lock);
+	up(&efivars_lock);
 
 	return efi_status_to_err(status);
 
@@ -658,30 +696,35 @@ EXPORT_SYMBOL_GPL(efivar_entry_set);
  * from crash/panic handlers.
  *
  * Crucially, this function will not block if it cannot acquire
- * __efivars->lock. Instead, it returns -EBUSY.
+ * efivars_lock. Instead, it returns -EBUSY.
  */
 static int
 efivar_entry_set_nonblocking(efi_char16_t *name, efi_guid_t vendor,
 			     u32 attributes, unsigned long size, void *data)
 {
-	const struct efivar_operations *ops = __efivars->ops;
-	unsigned long flags;
+	const struct efivar_operations *ops;
 	efi_status_t status;
 
-	if (!spin_trylock_irqsave(&__efivars->lock, flags))
+	if (down_trylock(&efivars_lock))
 		return -EBUSY;
+
+	if (!__efivars) {
+		up(&efivars_lock);
+		return -EINVAL;
+	}
 
 	status = check_var_size_nonblocking(attributes,
 					    size + ucs2_strsize(name, 1024));
 	if (status != EFI_SUCCESS) {
-		spin_unlock_irqrestore(&__efivars->lock, flags);
+		up(&efivars_lock);
 		return -ENOSPC;
 	}
 
+	ops = __efivars->ops;
 	status = ops->set_variable_nonblocking(name, &vendor, attributes,
 					       size, data);
 
-	spin_unlock_irqrestore(&__efivars->lock, flags);
+	up(&efivars_lock);
 	return efi_status_to_err(status);
 }
 
@@ -705,10 +748,13 @@ efivar_entry_set_nonblocking(efi_char16_t *name, efi_guid_t vendor,
 int efivar_entry_set_safe(efi_char16_t *name, efi_guid_t vendor, u32 attributes,
 			  bool block, unsigned long size, void *data)
 {
-	const struct efivar_operations *ops = __efivars->ops;
-	unsigned long flags;
+	const struct efivar_operations *ops;
 	efi_status_t status;
 
+	if (!__efivars)
+		return -EINVAL;
+
+	ops = __efivars->ops;
 	if (!ops->query_variable_store)
 		return -ENOSYS;
 
@@ -727,21 +773,22 @@ int efivar_entry_set_safe(efi_char16_t *name, efi_guid_t vendor, u32 attributes,
 						    size, data);
 
 	if (!block) {
-		if (!spin_trylock_irqsave(&__efivars->lock, flags))
+		if (down_trylock(&efivars_lock))
 			return -EBUSY;
 	} else {
-		spin_lock_irqsave(&__efivars->lock, flags);
+		if (down_interruptible(&efivars_lock))
+			return -EINTR;
 	}
 
 	status = check_var_size(attributes, size + ucs2_strsize(name, 1024));
 	if (status != EFI_SUCCESS) {
-		spin_unlock_irqrestore(&__efivars->lock, flags);
+		up(&efivars_lock);
 		return -ENOSPC;
 	}
 
 	status = ops->set_variable(name, &vendor, attributes, size, data);
 
-	spin_unlock_irqrestore(&__efivars->lock, flags);
+	up(&efivars_lock);
 
 	return efi_status_to_err(status);
 }
@@ -770,8 +817,6 @@ struct efivar_entry *efivar_entry_find(efi_char16_t *name, efi_guid_t guid,
 	struct efivar_entry *entry, *n;
 	int strsize1, strsize2;
 	bool found = false;
-
-	lockdep_assert_held(&__efivars->lock);
 
 	list_for_each_entry_safe(entry, n, head, list) {
 		strsize1 = ucs2_strsize(name, 1024);
@@ -809,15 +854,21 @@ EXPORT_SYMBOL_GPL(efivar_entry_find);
  */
 int efivar_entry_size(struct efivar_entry *entry, unsigned long *size)
 {
-	const struct efivar_operations *ops = __efivars->ops;
+	const struct efivar_operations *ops;
 	efi_status_t status;
 
 	*size = 0;
 
-	spin_lock_irq(&__efivars->lock);
+	if (down_interruptible(&efivars_lock))
+		return -EINTR;
+	if (!__efivars) {
+		up(&efivars_lock);
+		return -EINVAL;
+	}
+	ops = __efivars->ops;
 	status = ops->get_variable(entry->var.VariableName,
 				   &entry->var.VendorGuid, NULL, size, NULL);
-	spin_unlock_irq(&__efivars->lock);
+	up(&efivars_lock);
 
 	if (status != EFI_BUFFER_TOO_SMALL)
 		return efi_status_to_err(status);
@@ -840,14 +891,14 @@ EXPORT_SYMBOL_GPL(efivar_entry_size);
 int __efivar_entry_get(struct efivar_entry *entry, u32 *attributes,
 		       unsigned long *size, void *data)
 {
-	const struct efivar_operations *ops = __efivars->ops;
 	efi_status_t status;
 
-	lockdep_assert_held(&__efivars->lock);
+	if (!__efivars)
+		return -EINVAL;
 
-	status = ops->get_variable(entry->var.VariableName,
-				   &entry->var.VendorGuid,
-				   attributes, size, data);
+	status = __efivars->ops->get_variable(entry->var.VariableName,
+					      &entry->var.VendorGuid,
+					      attributes, size, data);
 
 	return efi_status_to_err(status);
 }
@@ -863,14 +914,20 @@ EXPORT_SYMBOL_GPL(__efivar_entry_get);
 int efivar_entry_get(struct efivar_entry *entry, u32 *attributes,
 		     unsigned long *size, void *data)
 {
-	const struct efivar_operations *ops = __efivars->ops;
 	efi_status_t status;
 
-	spin_lock_irq(&__efivars->lock);
-	status = ops->get_variable(entry->var.VariableName,
-				   &entry->var.VendorGuid,
-				   attributes, size, data);
-	spin_unlock_irq(&__efivars->lock);
+	if (down_interruptible(&efivars_lock))
+		return -EINTR;
+
+	if (!__efivars) {
+		up(&efivars_lock);
+		return -EINVAL;
+	}
+
+	status = __efivars->ops->get_variable(entry->var.VariableName,
+					      &entry->var.VendorGuid,
+					      attributes, size, data);
+	up(&efivars_lock);
 
 	return efi_status_to_err(status);
 }
@@ -901,7 +958,7 @@ EXPORT_SYMBOL_GPL(efivar_entry_get);
 int efivar_entry_set_get_size(struct efivar_entry *entry, u32 attributes,
 			      unsigned long *size, void *data, bool *set)
 {
-	const struct efivar_operations *ops = __efivars->ops;
+	const struct efivar_operations *ops;
 	efi_char16_t *name = entry->var.VariableName;
 	efi_guid_t *vendor = &entry->var.VendorGuid;
 	efi_status_t status;
@@ -917,7 +974,13 @@ int efivar_entry_set_get_size(struct efivar_entry *entry, u32 attributes,
 	 * set_variable call, and removal of the variable from the efivars
 	 * list (in the case of an authenticated delete).
 	 */
-	spin_lock_irq(&__efivars->lock);
+	if (down_interruptible(&efivars_lock))
+		return -EINTR;
+
+	if (!__efivars) {
+		err = -EINVAL;
+		goto out;
+	}
 
 	/*
 	 * Ensure that the available space hasn't shrunk below the safe level
@@ -934,6 +997,8 @@ int efivar_entry_set_get_size(struct efivar_entry *entry, u32 attributes,
 			goto out;
 		}
 	}
+
+	ops = __efivars->ops;
 
 	status = ops->set_variable(name, vendor, attributes, *size, data);
 	if (status != EFI_SUCCESS) {
@@ -957,7 +1022,7 @@ int efivar_entry_set_get_size(struct efivar_entry *entry, u32 attributes,
 	if (status == EFI_NOT_FOUND)
 		efivar_entry_list_del_unlock(entry);
 	else
-		spin_unlock_irq(&__efivars->lock);
+		up(&efivars_lock);
 
 	if (status && status != EFI_BUFFER_TOO_SMALL)
 		return efi_status_to_err(status);
@@ -965,7 +1030,7 @@ int efivar_entry_set_get_size(struct efivar_entry *entry, u32 attributes,
 	return 0;
 
 out:
-	spin_unlock_irq(&__efivars->lock);
+	up(&efivars_lock);
 	return err;
 
 }
@@ -978,9 +1043,9 @@ EXPORT_SYMBOL_GPL(efivar_entry_set_get_size);
  * efivar_entry_iter_end() is called. This function is usually used in
  * conjunction with __efivar_entry_iter() or efivar_entry_iter().
  */
-void efivar_entry_iter_begin(void)
+int efivar_entry_iter_begin(void)
 {
-	spin_lock_irq(&__efivars->lock);
+	return down_interruptible(&efivars_lock);
 }
 EXPORT_SYMBOL_GPL(efivar_entry_iter_begin);
 
@@ -991,7 +1056,7 @@ EXPORT_SYMBOL_GPL(efivar_entry_iter_begin);
  */
 void efivar_entry_iter_end(void)
 {
-	spin_unlock_irq(&__efivars->lock);
+	up(&efivars_lock);
 }
 EXPORT_SYMBOL_GPL(efivar_entry_iter_end);
 
@@ -1006,7 +1071,7 @@ EXPORT_SYMBOL_GPL(efivar_entry_iter_end);
  * entry on the list. It is safe for @func to remove entries in the
  * list via efivar_entry_delete().
  *
- * You MUST call efivar_enter_iter_begin() before this function, and
+ * You MUST call efivar_entry_iter_begin() before this function, and
  * efivar_entry_iter_end() afterwards.
  *
  * It is possible to begin iteration from an arbitrary entry within
@@ -1067,7 +1132,9 @@ int efivar_entry_iter(int (*func)(struct efivar_entry *, void *),
 {
 	int err = 0;
 
-	efivar_entry_iter_begin();
+	err = efivar_entry_iter_begin();
+	if (err)
+		return err;
 	err = __efivar_entry_iter(func, head, data, NULL);
 	efivar_entry_iter_end();
 
@@ -1112,11 +1179,17 @@ int efivars_register(struct efivars *efivars,
 		     const struct efivar_operations *ops,
 		     struct kobject *kobject)
 {
-	spin_lock_init(&efivars->lock);
+	if (down_interruptible(&efivars_lock))
+		return -EINTR;
+
 	efivars->ops = ops;
 	efivars->kobject = kobject;
 
 	__efivars = efivars;
+
+	pr_info("Registered efivars operations\n");
+
+	up(&efivars_lock);
 
 	return 0;
 }
@@ -1133,6 +1206,9 @@ int efivars_unregister(struct efivars *efivars)
 {
 	int rv;
 
+	if (down_interruptible(&efivars_lock))
+		return -EINTR;
+
 	if (!__efivars) {
 		printk(KERN_ERR "efivars not registered\n");
 		rv = -EINVAL;
@@ -1144,10 +1220,18 @@ int efivars_unregister(struct efivars *efivars)
 		goto out;
 	}
 
+	pr_info("Unregistered efivars operations\n");
 	__efivars = NULL;
 
 	rv = 0;
 out:
+	up(&efivars_lock);
 	return rv;
 }
 EXPORT_SYMBOL_GPL(efivars_unregister);
+
+int efivar_supports_writes(void)
+{
+	return __efivars && __efivars->ops->set_variable;
+}
+EXPORT_SYMBOL_GPL(efivar_supports_writes);

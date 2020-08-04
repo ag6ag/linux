@@ -8,7 +8,7 @@ Required properties:
           See: Documentation/devicetree/bindings/clock/clock-bindings.txt
 - pinctrl-names: A pinctrl state names "default" must be defined.
 - pinctrl-0: Phandle referencing pin configuration of the UART peripheral.
-             See: Documentation/devicetree/bindings/pinctrl/pinctrl-binding.txt
+             See: Documentation/devicetree/bindings/pinctrl/pinctrl-bindings.txt
 
 Optional properties:
 - cts-gpios: CTS pin for UART
@@ -20,7 +20,7 @@ Example:
 		interrupts = <112 IRQ_TYPE_LEVEL_HIGH>,
 			<113 IRQ_TYPE_LEVEL_HIGH>,
 			<114 IRQ_TYPE_LEVEL_HIGH>;
-		clocks = <&PBCLK2>;
+		clocks = <&rootclk PB2CLK>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&pinctrl_uart1
 				&pinctrl_uart1_cts

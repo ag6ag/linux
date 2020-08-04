@@ -1,15 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * Queued spinlock
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  *
  * (C) Copyright 2013-2015 Hewlett-Packard Development Company, L.P.
  * (C) Copyright 2015 Hewlett-Packard Enterprise Development LP
@@ -20,6 +11,7 @@
 #define __ASM_GENERIC_QSPINLOCK_H
 
 #include <asm-generic/qspinlock_types.h>
+#include <linux/atomic.h>
 
 /**
  * queued_spin_is_locked - is the spinlock locked?
@@ -29,29 +21,10 @@
 static __always_inline int queued_spin_is_locked(struct qspinlock *lock)
 {
 	/*
-	 * queued_spin_lock_slowpath() can ACQUIRE the lock before
-	 * issuing the unordered store that sets _Q_LOCKED_VAL.
-	 *
-	 * See both smp_cond_acquire() sites for more detail.
-	 *
-	 * This however means that in code like:
-	 *
-	 *   spin_lock(A)		spin_lock(B)
-	 *   spin_unlock_wait(B)	spin_is_locked(A)
-	 *   do_something()		do_something()
-	 *
-	 * Both CPUs can end up running do_something() because the store
-	 * setting _Q_LOCKED_VAL will pass through the loads in
-	 * spin_unlock_wait() and/or spin_is_locked().
-	 *
-	 * Avoid this by issuing a full memory barrier between the spin_lock()
-	 * and the loads in spin_unlock_wait() and spin_is_locked().
-	 *
-	 * Note that regular mutual exclusion doesn't care about this
-	 * delayed store.
+	 * Any !0 state indicates it is locked, even if _Q_LOCKED_VAL
+	 * isn't immediately observable.
 	 */
-	smp_mb();
-	return atomic_read(&lock->val) & _Q_LOCKED_MASK;
+	return atomic_read(&lock->val);
 }
 
 /**
@@ -85,10 +58,12 @@ static __always_inline int queued_spin_is_contended(struct qspinlock *lock)
  */
 static __always_inline int queued_spin_trylock(struct qspinlock *lock)
 {
-	if (!atomic_read(&lock->val) &&
-	   (atomic_cmpxchg_acquire(&lock->val, 0, _Q_LOCKED_VAL) == 0))
-		return 1;
-	return 0;
+	u32 val = atomic_read(&lock->val);
+
+	if (unlikely(val))
+		return 0;
+
+	return likely(atomic_try_cmpxchg_acquire(&lock->val, &val, _Q_LOCKED_VAL));
 }
 
 extern void queued_spin_lock_slowpath(struct qspinlock *lock, u32 val);
@@ -99,11 +74,11 @@ extern void queued_spin_lock_slowpath(struct qspinlock *lock, u32 val);
  */
 static __always_inline void queued_spin_lock(struct qspinlock *lock)
 {
-	u32 val;
+	u32 val = 0;
 
-	val = atomic_cmpxchg_acquire(&lock->val, 0, _Q_LOCKED_VAL);
-	if (likely(val == 0))
+	if (likely(atomic_try_cmpxchg_acquire(&lock->val, &val, _Q_LOCKED_VAL)))
 		return;
+
 	queued_spin_lock_slowpath(lock, val);
 }
 
@@ -115,27 +90,11 @@ static __always_inline void queued_spin_lock(struct qspinlock *lock)
 static __always_inline void queued_spin_unlock(struct qspinlock *lock)
 {
 	/*
-	 * smp_mb__before_atomic() in order to guarantee release semantics
+	 * unlock() needs release semantics:
 	 */
-	smp_mb__before_atomic();
-	atomic_sub(_Q_LOCKED_VAL, &lock->val);
+	smp_store_release(&lock->locked, 0);
 }
 #endif
-
-/**
- * queued_spin_unlock_wait - wait until current lock holder releases the lock
- * @lock : Pointer to queued spinlock structure
- *
- * There is a very slight possibility of live-lock if the lockers keep coming
- * and the waiter is just unfortunate enough to not see any unlock state.
- */
-static inline void queued_spin_unlock_wait(struct qspinlock *lock)
-{
-	/* See queued_spin_is_locked() */
-	smp_mb();
-	while (atomic_read(&lock->val) & _Q_LOCKED_MASK)
-		cpu_relax();
-}
 
 #ifndef virt_spin_lock
 static __always_inline bool virt_spin_lock(struct qspinlock *lock)
@@ -154,7 +113,5 @@ static __always_inline bool virt_spin_lock(struct qspinlock *lock)
 #define arch_spin_lock(l)		queued_spin_lock(l)
 #define arch_spin_trylock(l)		queued_spin_trylock(l)
 #define arch_spin_unlock(l)		queued_spin_unlock(l)
-#define arch_spin_lock_flags(l, f)	queued_spin_lock(l)
-#define arch_spin_unlock_wait(l)	queued_spin_unlock_wait(l)
 
 #endif /* __ASM_GENERIC_QSPINLOCK_H */

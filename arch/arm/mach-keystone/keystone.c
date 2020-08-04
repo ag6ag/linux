@@ -1,13 +1,10 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Keystone2 based boards and SOC related code.
  *
  * Copyright 2013 Texas Instruments, Inc.
  *	Cyril Chemparathy <cyril@ti.com>
  *	Santosh Shilimkar <santosh.shillimkar@ti.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
  */
 #include <linux/io.h>
 #include <linux/of.h>
@@ -60,7 +57,6 @@ static void __init keystone_init(void)
 		bus_register_notifier(&platform_bus_type, &platform_nb);
 	}
 	keystone_pm_runtime_init();
-	of_platform_populate(NULL, of_default_bus_match_table, NULL, NULL);
 }
 
 static long long __init keystone_pv_fixup(void)

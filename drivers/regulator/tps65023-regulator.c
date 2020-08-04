@@ -3,7 +3,7 @@
  *
  * Supports TPS65023 Regulator
  *
- * Copyright (C) 2009 Texas Instrument Incorporated - http://www.ti.com/
+ * Copyright (C) 2009 Texas Instrument Incorporated - https://www.ti.com/
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License as
@@ -311,8 +311,7 @@ static int tps_65023_probe(struct i2c_client *client,
 
 	/* Enable setting output voltage by I2C */
 	regmap_update_bits(tps->regmap, TPS65023_REG_CON_CTRL2,
-					TPS65023_REG_CTRL2_CORE_ADJ,
-					TPS65023_REG_CTRL2_CORE_ADJ);
+			   TPS65023_REG_CTRL2_CORE_ADJ, 0);
 
 	return 0;
 }

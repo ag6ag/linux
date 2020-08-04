@@ -1,7 +1,5 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
 /*
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation.
  *
  * Copyright (C) 2010 John Crispin <john@phrozen.org>
  */
@@ -22,7 +20,7 @@
 
 /*
  * during early_printk no ioremap possible at this early stage
- * lets use KSEG1 instead
+ * let's use KSEG1 instead
  */
 #define LTQ_ASC0_BASE_ADDR	0x1E100C00
 #define LTQ_EARLY_ASC		KSEG1ADDR(LTQ_ASC0_BASE_ADDR)

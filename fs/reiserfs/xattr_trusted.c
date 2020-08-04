@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include "reiserfs.h"
 #include <linux/capability.h>
 #include <linux/errno.h>
@@ -19,13 +20,14 @@ trusted_get(const struct xattr_handler *handler, struct dentry *unused,
 }
 
 static int
-trusted_set(const struct xattr_handler *handler, struct dentry *dentry,
-	    const char *name, const void *buffer, size_t size, int flags)
+trusted_set(const struct xattr_handler *handler, struct dentry *unused,
+	    struct inode *inode, const char *name, const void *buffer,
+	    size_t size, int flags)
 {
-	if (!capable(CAP_SYS_ADMIN) || IS_PRIVATE(d_inode(dentry)))
+	if (!capable(CAP_SYS_ADMIN) || IS_PRIVATE(inode))
 		return -EPERM;
 
-	return reiserfs_xattr_set(d_inode(dentry),
+	return reiserfs_xattr_set(inode,
 				  xattr_full_name(handler, name),
 				  buffer, size, flags);
 }

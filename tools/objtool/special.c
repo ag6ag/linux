@@ -1,18 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
 /*
  * Copyright (C) 2015 Josh Poimboeuf <jpoimboe@redhat.com>
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, see <http://www.gnu.org/licenses/>.
  */
 
 /*
@@ -23,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "builtin.h"
 #include "special.h"
 #include "warn.h"
 
@@ -30,9 +19,9 @@
 #define EX_ORIG_OFFSET		0
 #define EX_NEW_OFFSET		4
 
-#define JUMP_ENTRY_SIZE		24
+#define JUMP_ENTRY_SIZE		16
 #define JUMP_ORIG_OFFSET	0
-#define JUMP_NEW_OFFSET		8
+#define JUMP_NEW_OFFSET		4
 
 #define ALT_ENTRY_SIZE		13
 #define ALT_ORIG_OFFSET		0
@@ -42,6 +31,7 @@
 #define ALT_NEW_LEN_OFFSET	11
 
 #define X86_FEATURE_POPCNT (4*32+23)
+#define X86_FEATURE_SMAP   (9*32+20)
 
 struct special_entry {
 	const char *sec;
@@ -82,7 +72,7 @@ static int get_alt_entry(struct elf *elf, struct special_entry *entry,
 			 struct section *sec, int idx,
 			 struct special_alt *alt)
 {
-	struct rela *orig_rela, *new_rela;
+	struct reloc *orig_reloc, *new_reloc;
 	unsigned long offset;
 
 	offset = idx * entry->size;
@@ -91,16 +81,16 @@ static int get_alt_entry(struct elf *elf, struct special_entry *entry,
 	alt->jump_or_nop = entry->jump_or_nop;
 
 	if (alt->group) {
-		alt->orig_len = *(unsigned char *)(sec->data + offset +
+		alt->orig_len = *(unsigned char *)(sec->data->d_buf + offset +
 						   entry->orig_len);
-		alt->new_len = *(unsigned char *)(sec->data + offset +
+		alt->new_len = *(unsigned char *)(sec->data->d_buf + offset +
 						  entry->new_len);
 	}
 
 	if (entry->feature) {
 		unsigned short feature;
 
-		feature = *(unsigned short *)(sec->data + offset +
+		feature = *(unsigned short *)(sec->data->d_buf + offset +
 					      entry->feature);
 
 		/*
@@ -110,32 +100,48 @@ static int get_alt_entry(struct elf *elf, struct special_entry *entry,
 		 */
 		if (feature == X86_FEATURE_POPCNT)
 			alt->skip_orig = true;
+
+		/*
+		 * If UACCESS validation is enabled; force that alternative;
+		 * otherwise force it the other way.
+		 *
+		 * What we want to avoid is having both the original and the
+		 * alternative code flow at the same time, in that case we can
+		 * find paths that see the STAC but take the NOP instead of
+		 * CLAC and the other way around.
+		 */
+		if (feature == X86_FEATURE_SMAP) {
+			if (uaccess)
+				alt->skip_orig = true;
+			else
+				alt->skip_alt = true;
+		}
 	}
 
-	orig_rela = find_rela_by_dest(sec, offset + entry->orig);
-	if (!orig_rela) {
-		WARN_FUNC("can't find orig rela", sec, offset + entry->orig);
+	orig_reloc = find_reloc_by_dest(elf, sec, offset + entry->orig);
+	if (!orig_reloc) {
+		WARN_FUNC("can't find orig reloc", sec, offset + entry->orig);
 		return -1;
 	}
-	if (orig_rela->sym->type != STT_SECTION) {
-		WARN_FUNC("don't know how to handle non-section rela symbol %s",
-			   sec, offset + entry->orig, orig_rela->sym->name);
+	if (orig_reloc->sym->type != STT_SECTION) {
+		WARN_FUNC("don't know how to handle non-section reloc symbol %s",
+			   sec, offset + entry->orig, orig_reloc->sym->name);
 		return -1;
 	}
 
-	alt->orig_sec = orig_rela->sym->sec;
-	alt->orig_off = orig_rela->addend;
+	alt->orig_sec = orig_reloc->sym->sec;
+	alt->orig_off = orig_reloc->addend;
 
 	if (!entry->group || alt->new_len) {
-		new_rela = find_rela_by_dest(sec, offset + entry->new);
-		if (!new_rela) {
-			WARN_FUNC("can't find new rela",
+		new_reloc = find_reloc_by_dest(elf, sec, offset + entry->new);
+		if (!new_reloc) {
+			WARN_FUNC("can't find new reloc",
 				  sec, offset + entry->new);
 			return -1;
 		}
 
-		alt->new_sec = new_rela->sym->sec;
-		alt->new_off = (unsigned int)new_rela->addend;
+		alt->new_sec = new_reloc->sym->sec;
+		alt->new_off = (unsigned int)new_reloc->addend;
 
 		/* _ASM_EXTABLE_EX hack */
 		if (alt->new_off >= 0x7ffffff0)

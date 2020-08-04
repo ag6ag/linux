@@ -1,20 +1,13 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * Purna Chandra Mandal,<purna.mandal@microchip.com>
  * Copyright (C) 2015 Microchip Technology Inc.  All rights reserved.
- *
- * This program is free software; you can distribute it and/or modify it
- * under the terms of the GNU General Public License (Version 2) as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License
- * for more details.
  */
 #include <dt-bindings/clock/microchip,pic32-clock.h>
 #include <linux/clk.h>
 #include <linux/clk-provider.h>
 #include <linux/clkdev.h>
+#include <linux/io.h>
 #include <linux/module.h>
 #include <linux/of_address.h>
 #include <linux/of_platform.h>
@@ -118,6 +111,7 @@ static const struct pic32_sec_osc_data sosc_clk = {
 	.status_reg = 0x1d0,
 	.enable_mask = BIT(1),
 	.status_mask = BIT(4),
+	.fixed_rate = 32768,
 	.init_data = {
 		.name = "sosc_clk",
 		.parent_names = NULL,
@@ -180,15 +174,15 @@ static int pic32mzda_clk_probe(struct platform_device *pdev)
 
 	/* register fixed rate clocks */
 	clks[POSCCLK] = clk_register_fixed_rate(&pdev->dev, "posc_clk", NULL,
-						CLK_IS_ROOT, 24000000);
+						0, 24000000);
 	clks[FRCCLK] =  clk_register_fixed_rate(&pdev->dev, "frc_clk", NULL,
-						CLK_IS_ROOT, 8000000);
+						0, 8000000);
 	clks[BFRCCLK] = clk_register_fixed_rate(&pdev->dev, "bfrc_clk", NULL,
-						CLK_IS_ROOT, 8000000);
+						0, 8000000);
 	clks[LPRCCLK] = clk_register_fixed_rate(&pdev->dev, "lprc_clk", NULL,
-						CLK_IS_ROOT, 32000);
+						0, 32000);
 	clks[UPLLCLK] = clk_register_fixed_rate(&pdev->dev, "usbphy_clk", NULL,
-						CLK_IS_ROOT, 24000000);
+						0, 24000000);
 	/* fixed rate (optional) clock */
 	if (of_find_property(np, "microchip,pic32mzda-sosc", NULL)) {
 		pr_info("pic32-clk: dt requests SOSC.\n");
